@@ -5,7 +5,11 @@ version = "0.1.0"
 dependencies = [
     "dagster==1.13.24",
     "dagster-dbt>=0.29.24",
+    "dbt-core>=1.12.5",
+    "dbt-core-experimental-parser",
     "dbt-duckdb>=1.11.0",
+    "dbt-oracle>=1.12.0",
+    "pandas>=2.3.3",
 ]
 
 [dependency-groups]
@@ -30,4 +34,5 @@ registry_modules = [
     "dagster_dbt_demo.components.*",
 ]
 
-
+[tool.uv.sources]
+dbt-core-experimental-parser = { path = "packages/dbt_core_experimental_parser-2.0.5-py3-none-win_amd64.whl" }
