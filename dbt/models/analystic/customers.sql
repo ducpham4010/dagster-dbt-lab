@@ -55,7 +55,7 @@ final as (
         customer_orders.most_recent_order,
         customer_orders.number_of_orders,
         customer_payments.total_amount as customer_lifetime_value,
-        '{{ var("start_date") }}' as business_date
+        '{{ var("partition_date") }}' as business_date
 
     from customers
 
