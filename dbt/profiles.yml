@@ -23,4 +23,5 @@ jaffle_shop:
       # Easy Connect string, same as the Python assets use: host:port/service_name
       connection_string: "{{ env_var('ORACLE_DNS') }}"
       schema: "{{ env_var('ORACLE_SCHEMA', env_var('ORACLE_USER')) }}"
+      database : DEV
       threads: 4

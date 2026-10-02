@@ -568,6 +568,33 @@ Bảng được tạo trong schema của user đăng nhập (`ORACLE_USER`) — 
 
 ---
 
+## 15. `dg dev`: code server bị kill với `DagsterExecutionInterruptedError` trong `refresh_state` (treo ~2.5 phút)
+
+**Nguyên nhân:**
+Khi load definitions, `DbtProjectComponent.refresh_state` copy cả thư mục `dbt/` vào `src/dagster_dbt_demo/defs/.local_defs_state/` rồi chạy `dbt compile`. File `dbt/seeds/.gitkeep` (rỗng, 0 byte) bị iCloud offload (`dataless`) và **không tải về được** — đọc file là treo vô hạn (`cat` timeout). Bước copy treo → quá thời gian chờ code server → `dg dev` kill process (`DagsterExecutionInterruptedError`), để lại file `state` 0 byte.
+
+Không phải lỗi dbt/Oracle: chạy `dbt compile --profiles-dir .` trực tiếp xong trong ~5s, exit 0; `nc -vz 192.168.102.4 1521` thông.
+
+Ngoài ra còn 31 file `dataless` khác (`README.md`, `pack_project.py`, nhiều file trong `.git/`), nhưng các file này iCloud tải về được khi đọc.
+
+**Cách fix:**
+```bash
+# .gitkeep rỗng nên tạo lại là y hệt
+rm -f dbt/seeds/.gitkeep && touch dbt/seeds/.gitkeep
+
+# ép iCloud tải về các file dataless còn lại
+find . -path ./.venv.nosync -prune -o -flags +dataless -print > /tmp/dl.txt
+while IFS= read -r f; do cat "$f" > /dev/null & done < /tmp/dl.txt; wait
+
+# xóa state hỏng của lần bị kill
+rm -rf src/dagster_dbt_demo/defs/.local_defs_state
+```
+Kiểm tra: `dg check defs` (venv đã activate) → `All definitions loaded successfully.` trong ~9s.
+
+Lưu ý: chừng nào project còn nằm trong `~/Desktop`, iCloud có thể offload file tiếp. Gặp treo khó hiểu → chạy lại lệnh `find ... -flags +dataless` ở trên trước tiên. Triệt để: dời project ra khỏi `~/Desktop`/`~/Documents`.
+
+---
+
 ## Tổng kết kiến trúc sau khi fix
 
 - `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Oracle schema `vpbcustom` bằng bind params + `executemany`, trả về `MaterializeResult` với `data_version` hash theo nội dung data và `code_version` cố định để tránh báo "Unsynced" giả.
