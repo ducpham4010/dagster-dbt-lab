@@ -19,6 +19,13 @@ clean-targets:
 
 require-dbt-version: [">=1.0.0", "<2.0.0"]
 
+# Defaults so `dbt compile`/`parse` works without --vars (e.g. Dagster's prepare step).
+# Partitioned runs from Dagster override these via `--vars` in defs.yaml.
+vars:
+  start_date: "1900-01-01"
+  end_date: "1900-01-02"
+  partition_date: "1900-01-01"
+
 models:
   jaffle_shop:
       materialized: table

@@ -443,6 +443,131 @@ Dagster cho phép group name lồng nhau (nested/hierarchical group) bằng các
 
 ---
 
+## 9. `KeyError: 'seed.jaffle_shop.raw_customers'` khi materialize — Dagster chạy bản dbt project cũ
+
+**Nguyên nhân:**
+`DbtProjectComponent` cache một bản copy của dbt project + manifest trong `src/dagster_dbt_demo/defs/.local_defs_state/`. Sau khi sửa `dbt_project.yml` (disable seed), Dagster vẫn dùng bản copy cũ, nên dbt trong Dagster vẫn load seed đã bị disable, trong khi chạy `dbt build` trực tiếp thì bình thường.
+
+**Cách fix:**
+Xóa state cache để Dagster dựng lại:
+```bash
+rm -rf src/dagster_dbt_demo/defs/.local_defs_state
+# hoặc
+dg utils refresh-defs-state
+```
+Mỗi khi sửa dbt project mà Dagster không thấy thay đổi → làm bước này. Nên thêm `.local_defs_state/` vào `.gitignore`.
+
+---
+
+## 10. `dbt parse` / `dg dev` treo vô thời hạn (0% CPU) — file trong `.venv` bị iCloud offload
+
+**Nguyên nhân:**
+Project nằm trong `~/Desktop`, thư mục được iCloud "Desktop & Documents" sync. iCloud đã offload hơn 4000 file trong `.venv` (flag `dataless`: file còn tên nhưng nội dung không còn trên đĩa). Khi Python import các file này, nó chờ iCloud tải về — nhưng iCloud sync đang tắt (`brctl status` → `SYNC DISABLED`) nên treo mãi. Stack dump (`PYTHONFAULTHANDLER=1` + `kill -ABRT`) dừng ở `importlib ... get_data` khi import `dateutil`.
+
+Kiểm tra:
+```bash
+find .venv -flags +dataless | wc -l      # > 0 là bị
+ls -lO .venv/lib/python3.12/site-packages/dateutil/   # thấy "compressed,dataless"
+```
+
+**Cách fix:**
+Dựng lại venv ở chỗ iCloud không sync, ví dụ:
+```bash
+rm -rf .venv
+mkdir .venv.nosync && ln -s .venv.nosync .venv   # iCloud bỏ qua tên *.nosync
+uv sync
+```
+Triệt để nhất: dời cả project ra khỏi `~/Desktop` / `~/Documents`.
+
+---
+
+## 11. `sqlite3.DatabaseError: file is not a database` khi chạy `dg dev`
+
+**Nguyên nhân:**
+Không set `DAGSTER_HOME` nên `dg dev` dùng thư mục tạm `.tmp_dagster_home_*` trong project (nằm trên Desktop). Các file SQLite trong đó (`schedules.db`, `history/runs/*.db`) bị iCloud offload (`dataless`) giống mục 10 → SQLite đọc ra dữ liệu rác.
+
+**Cách fix:**
+Set `DAGSTER_HOME` cố định, nằm ngoài thư mục iCloud sync, và xóa thư mục tạm cũ:
+```bash
+rm -rf .tmp_dagster_home_*
+mkdir -p ~/.dagster_home && touch ~/.dagster_home/dagster.yaml
+echo 'export DAGSTER_HOME=~/.dagster_home' >> ~/.zshrc
+```
+
+---
+
+## 12. `sqlite3.OperationalError: attempt to write a readonly database` (`PRAGMA journal_mode=WAL;`)
+
+**Nguyên nhân:**
+`DAGSTER_HOME=/Volumes/Data/.dagster_home` nằm trên ổ ngoài format **exFAT**. Test 1 process bật WAL trên exFAT vẫn được, nhưng `dg dev` chạy nhiều process (webserver, daemon, code server) cùng mở SQLite ở chế độ WAL — cần file lock + shared memory (`-shm`), thứ exFAT (mount qua fskit) không hỗ trợ ổn định → lỗi readonly. (Nguyên nhân suy luận, chưa tái hiện được đúng kịch bản nhiều process.)
+
+**Cách fix:**
+Để `DAGSTER_HOME` trên ổ APFS nội bộ, ngoài thư mục iCloud: `~/.dagster_home` (xem mục 11). Không đặt SQLite storage của Dagster trên exFAT/FAT.
+
+---
+
+## 13. `Required var 'start_date' not found in config` khi load definitions (`dbt compile --quiet` exit code 2)
+
+**Nguyên nhân:**
+Khi load definitions, `DbtProjectComponent` chạy `prepare_project_cli_args: ['compile', '--quiet']` **không có `--vars`**. Biến `start_date`, `end_date`, `partition_date` chỉ được truyền ở `cli_args` lúc chạy `build` theo partition. Model `orders.sql` (`var("start_date")`) và `customers.sql` (`var("partition_date")`) không có default → compile lỗi → code location `dagster-dbt` load lỗi.
+
+**Cách fix:**
+Khai báo giá trị mặc định trong `dbt_project.yml`. Lúc materialize partition, `--vars` trong `defs.yaml` sẽ override.
+
+**Code sau (`dbt/dbt_project.yml`):**
+```yaml
+# Defaults so `dbt compile`/`parse` works without --vars (e.g. Dagster's prepare step).
+# Partitioned runs from Dagster override these via `--vars` in defs.yaml.
+vars:
+  start_date: "1900-01-01"
+  end_date: "1900-01-02"
+  partition_date: "1900-01-01"
+```
+
+Lưu ý: description của asset trên UI hiển thị SQL lúc compile, nên sẽ thấy `business_date = '1900-01-01'` — bình thường.
+
+---
+
+## 14. Bổ sung: tự tạo bảng `RAW_CUSTOMERS`/`RAW_ORDERS` nếu chưa tồn tại (chủ động, tránh `ORA-00942`)
+
+**Nguyên nhân:**
+Asset Python `TRUNCATE` + `INSERT` vào bảng có sẵn; với schema/DB mới chưa có bảng sẽ lỗi `ORA-00942: table or view does not exist`. Oracle 19c không có `CREATE TABLE IF NOT EXISTS` (chỉ có từ 23ai).
+
+**Cách fix:**
+Thêm helper chạy `CREATE TABLE` trong khối PL/SQL, bỏ qua `ORA-00955` (tên đã được dùng), các lỗi khác vẫn raise.
+
+**Code sau (`src/dagster_dbt_demo/defs/assets.py`):**
+```python
+def _create_table_if_not_exists(cursor, create_statement: str) -> None:
+    cursor.execute(
+        """
+        BEGIN
+            EXECUTE IMMEDIATE :ddl;
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """,
+        ddl=create_statement,
+    )
+
+# trong raw_customers, trước TRUNCATE:
+_create_table_if_not_exists(
+    cursor,
+    "CREATE TABLE RAW_CUSTOMERS ("
+    "ID NUMBER PRIMARY KEY, "
+    "FIRST_NAME VARCHAR2(100), "
+    "LAST_NAME VARCHAR2(100))",
+)
+# raw_orders tương tự: ID NUMBER PRIMARY KEY, USER_ID NUMBER, ORDER_DATE DATE, STATUS VARCHAR2(50)
+```
+
+Bảng được tạo trong schema của user đăng nhập (`ORACLE_USER`) — phải khớp `schema` của source `raw` trong `sources.yml`.
+
+---
+
 ## Tổng kết kiến trúc sau khi fix
 
 - `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Oracle schema `vpbcustom` bằng bind params + `executemany`, trả về `MaterializeResult` với `data_version` hash theo nội dung data và `code_version` cố định để tránh báo "Unsynced" giả.
@@ -452,3 +577,6 @@ Dagster cho phép group name lồng nhau (nested/hierarchical group) bằng các
 - `src/dagster_dbt_demo/defs/dbt_ingest/defs.yaml`: thêm điều kiện đặc biệt trong Jinja template của `translation.group_name` để seed `raw_payments` thuộc subgroup `raw/seeds`, fallback `group_from_fqn(node.fqn)` cho các node khác — không cần đổi `template_vars.py`.
 - `src/dagster_dbt_demo/defs/assets.py`: asset Python `raw_customers`, `raw_orders` thuộc subgroup `raw/python`.
 - `dbt/seeds/schema.yml`: khai báo `meta.dagster.group_name: raw` cho seed `raw_payments` — giữ lại cho rõ ý định, nhưng không có hiệu lực thực tế vì bị `translation.group_name` ở `defs.yaml` override (xem mục 7).
+- `src/dagster_dbt_demo/defs/assets.py`: asset `raw_customers`, `raw_orders` tự `CREATE TABLE` nếu chưa có (bỏ qua `ORA-00955`) trước khi truncate + insert (xem mục 14).
+- `dbt/dbt_project.yml`: khai báo default cho `vars` (`start_date`, `end_date`, `partition_date`) để bước prepare `dbt compile` của Dagster chạy được không cần `--vars` (xem mục 13).
+- Môi trường: `DAGSTER_HOME=~/.dagster_home` (APFS, ngoài iCloud); `.venv` không nằm trong thư mục bị iCloud offload (xem mục 10–12).
