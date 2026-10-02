@@ -2,7 +2,7 @@
 version: 2
 sources:
   - name: raw
-    schema: raw
+    schema: dev
     tables:
       - name: raw_customers
         meta:

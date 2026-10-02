@@ -1,0 +1,8 @@
+version: 2
+
+seeds:
+  - name: raw_payments
+    config:
+      meta:
+        dagster:
+          group_name: raw

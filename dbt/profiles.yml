@@ -1,5 +1,5 @@
 jaffle_shop:
-  target: postgres
+  target: oracle
   outputs:
     dev:
       type: duckdb
@@ -14,4 +14,13 @@ jaffle_shop:
       password: "{{ env_var('POSTGRES_PASSWORD', 'dbt') }}"
       dbname: "{{ env_var('POSTGRES_DB', 'jaffle_shop') }}"
       schema: analytics
+      threads: 4
+
+    oracle:
+      type: oracle
+      user: "{{ env_var('ORACLE_USER') }}"
+      pass: "{{ env_var('ORACLE_PASSWORD') }}"
+      # Easy Connect string, same as the Python assets use: host:port/service_name
+      connection_string: "{{ env_var('ORACLE_DNS') }}"
+      schema: "{{ env_var('ORACLE_SCHEMA', env_var('ORACLE_USER')) }}"
       threads: 4

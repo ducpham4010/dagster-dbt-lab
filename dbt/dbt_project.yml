@@ -27,11 +27,7 @@ models:
 
 seeds:
   jaffle_shop:
-    # raw_customers / raw_orders are ingested by Dagster Python assets into raw.*;
-    # keep these seeds disabled to avoid duplicate asset keys.
-    raw_customers:
-      +enabled: false
-    raw_orders:
-      +enabled: false
-    raw_payments:
-      +schema: raw
+    raw_customers_bk:
+      enabled: false
+    raw_orders_bk:
+      enabled: false

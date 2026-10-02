@@ -288,9 +288,167 @@ context.add_output_metadata({"num_rows": len(rows)})
 
 ---
 
+## 6. Dagster UI báo `stg_customers` liên tục "Unsynced (1 change since last materialization / 1 upstream data version change / has a new materialization)" dù đã chạy lại full luồng
+
+**Hiện tượng:**
+Materialize `raw_customers` → `stg_customers` đúng thứ tự, kể cả chạy lại full pipeline, nhưng `stg_customers` trong UI vẫn luôn hiện "Unsynced" ngay sau khi build xong.
+
+**Nguyên nhân:**
+Asset Python `raw_customers`/`raw_orders` không khai báo `code_version` và không trả về `data_version` tường minh (hàm chỉ `return None`, dùng `context.add_output_metadata` để log metadata). Theo cơ chế mặc định của Dagster, khi asset không tự báo cáo `DataVersion`, **mỗi lần materialize sẽ tự sinh một data version khác nhau** (gắn theo run), bất kể nội dung data insert ra có giống lần trước hay không.
+
+Hệ quả: `stg_customers` (dbt model, phụ thuộc `raw_customers` qua `source()`) luôn thấy "upstream có data version mới" ngay sau khi `raw_customers` chạy lại — dù dữ liệu insert là y hệt — nên liên tục bị đánh dấu "Unsynced" dù bạn chạy đúng thứ tự.
+
+Tham khảo: [Asset versioning and caching — Dagster docs](https://docs.dagster.io/guides/dagster/asset-versioning-and-caching) — "By default, Dagster automatically computes a data version for each materialization of an asset. It does this by hashing a code version together with the data versions of any input assets."
+
+**Cách fix:**
+- Thêm `code_version="v1"` cố định cho asset — version của logic code, chỉ bump tay khi sửa logic ingest.
+- Đổi asset trả về `dg.MaterializeResult(data_version=..., metadata=...)`, với `data_version` được hash từ nội dung `rows` thực tế (không phải random/theo run). Nhờ vậy `data_version` chỉ đổi khi nội dung data ingest thực sự thay đổi, không đổi mỗi lần chạy lại với cùng data.
+
+**Code trước (`raw_customers`):**
+```python
+@dg.asset(key="raw_customers", compute_kind="python", group_name="raw")
+def raw_customers(context: dg.AssetExecutionContext) -> None:
+    """Ingest raw customer data from an external source."""
+    connection = get_connection()
+    insert_statement = "INSERT INTO RAW_CUSTOMERS (ID, FIRST_NAME, LAST_NAME) VALUES (:1, :2, :3)"
+    rows = [
+        (201, "ducph7", "P."),
+        ...
+    ]
+    cursor = connection.cursor()
+    cursor.execute("TRUNCATE TABLE RAW_CUSTOMERS")
+    cursor.executemany(insert_statement, rows)
+    connection.commit()
+    context.add_output_metadata({"num_rows": len(rows)})
+```
+
+**Code sau (`raw_customers`):**
+```python
+import hashlib
+
+def _data_version_for(rows: list[tuple]) -> dg.DataVersion:
+    """Build a stable DataVersion from the row contents.
+
+    Hashing the actual data means the data version only changes when the
+    ingested rows change, instead of a new version being generated on every
+    materialization (which would make downstream dbt assets always show up
+    as "Unsynced" even when nothing really changed).
+    """
+    digest = hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()
+    return dg.DataVersion(digest)
+
+
+@dg.asset(key="raw_customers", compute_kind="python", group_name="raw", code_version="v1")
+def raw_customers(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    """Ingest raw customer data from an external source."""
+    connection = get_connection()
+    insert_statement = "INSERT INTO RAW_CUSTOMERS (ID, FIRST_NAME, LAST_NAME) VALUES (:1, :2, :3)"
+    rows = [
+        (201, "ducph7", "P."),
+        ...
+    ]
+    cursor = connection.cursor()
+    cursor.execute("TRUNCATE TABLE RAW_CUSTOMERS")
+    cursor.executemany(insert_statement, rows)
+    connection.commit()
+    return dg.MaterializeResult(
+        data_version=_data_version_for(rows),
+        metadata={"num_rows": len(rows)},
+    )
+```
+
+Áp dụng tương tự cho `raw_orders` (cùng pattern, hash trên `rows` của orders).
+
+**Lưu ý nếu sau này đổi sang ingest từ nguồn thật (API/file/DB khác) thay vì data hard-code:**
+`_data_version_for` phải hash trên **data thực tế lấy được** tại runtime, không phải hard-code — nếu không, cơ chế theo dõi "data version" sẽ không còn phản ánh đúng việc data nguồn có thay đổi hay không.
+
+**Phân biệt nhanh `code_version` vs `data_version`:**
+
+| | `code_version` | `data_version` |
+|---|---|---|
+| Trả lời câu hỏi | Code đổi chưa? | Data đổi chưa? |
+| Ai set | Bạn (tay, bump khi sửa logic) | Bạn (qua `MaterializeResult`) hoặc Dagster tự sinh random mỗi run (mặc định) |
+| Ảnh hưởng | Theo dõi lịch sử version code qua các run | Quyết định downstream có bị đánh dấu "Unsynced" hay không |
+
+---
+
+## 7. `raw_payments` (seed) hiển thị group là `raw_payments` thay vì `raw` trên Dagster UI
+
+**Hiện tượng:**
+Group name của các model/seed trong dbt được quy định bởi `src/dagster_dbt_demo/defs/dbt_ingest/template_vars.py` (hàm `group_from_fqn`, lấy `fqn[1]` — folder đầu tiên sau tên project). Với model nằm trong subfolder (`models/staging/...`) thì ra đúng group `staging`. Nhưng seed `raw_payments` nằm thẳng ở `seeds/` (không có subfolder), nên fqn chỉ có `["jaffle_shop", "raw_payments"]` → `fqn[1]` trả về `"raw_payments"` (tên seed) thay vì group mong muốn (`raw`).
+
+**Nguyên nhân (thật):**
+Logic `group_from_fqn` dựa vào cấu trúc folder, nên chỉ đúng với node nằm trong subfolder — seed ở root `seeds/` không có folder con nên bị tính sai.
+
+Lần fix đầu tiên thử dùng `meta.dagster.group_name: raw` khai báo riêng trong `dbt/seeds/schema.yml` (property file cho seed), nhưng **không có hiệu lực**. Nguyên nhân: trong `dbt_ingest/defs.yaml`, field `translation.group_name` đang được set bằng 1 template Jinja cố định `"{{ group_from_fqn(node.fqn) }}"` áp dụng cho **toàn bộ** node của component. Khi `translation.group_name` được khai báo tường minh ở cấp component như vậy, nó sẽ luôn được tính và áp dụng cho mọi node — override hoàn toàn bất kỳ `meta.dagster.group_name` khai báo riêng ở từng node trong YAML của dbt (seed/model). Vì vậy `schema.yml` không sai cú pháp, chỉ là không bao giờ được dùng tới.
+
+**Cách fix (không đổi logic Python trong `template_vars.py`):**
+Sửa trực tiếp biểu thức Jinja trong `translation.group_name` ở `dbt_ingest/defs.yaml`, thêm điều kiện đặc biệt cho `raw_payments`, fallback về `group_from_fqn(node.fqn)` cho các node khác.
+
+**Code trước (`dbt_ingest/defs.yaml`):**
+```yaml
+  translation:
+    group_name: "{{ group_from_fqn(node.fqn) }}"
+    description: "Transforms data using dbt model {{ node.name }}"
+```
+
+**Code sau (`dbt_ingest/defs.yaml`):**
+```yaml
+  translation:
+    group_name: "{{ 'raw' if node.name == 'raw_payments' else group_from_fqn(node.fqn) }}"
+    description: "Transforms data using dbt model {{ node.name }}"
+```
+
+**Lưu ý:** `dbt/seeds/schema.yml` (khai báo `meta.dagster.group_name: raw` cho `raw_payments`) vẫn được giữ lại trong repo vì không gây hại, nhưng thực tế không có tác dụng do bị `translation.group_name` ở `defs.yaml` override — nguồn group_name thật sự nằm ở `defs.yaml`, không phải ở property file của dbt.
+
+---
+
+## 8. Bổ sung: dùng subgroup (nested group) để tách rõ "raw qua dbt seed" và "raw qua Python asset"
+
+**Nhu cầu:**
+Sau khi gom các asset raw (`raw_customers`, `raw_orders`, `raw_payments`) vào cùng group `raw`, muốn tách rõ hơn: asset nào do dbt seed tạo ra, asset nào do Python ingest tạo ra — mà vẫn giữ chung 1 group cha `raw` trên UI.
+
+**Cách làm:**
+Dagster cho phép group name lồng nhau (nested/hierarchical group) bằng cách dùng dấu `/` trong `group_name`. UI sẽ hiển thị dạng box lồng trong box theo cấp, và asset selection hỗ trợ wildcard theo cấp (ví dụ `group:"raw/*"` chọn hết asset trong các subgroup con của `raw`). Tham khảo: [Asset metadata and tags — Dagster docs](https://docs.dagster.io/guides/build/assets/metadata-and-tags).
+
+Áp dụng:
+- `raw_payments` (dbt seed) → group `raw/seeds`
+- `raw_customers`, `raw_orders` (Python asset) → group `raw/python`
+
+**Code trước (`dbt_ingest/defs.yaml`):**
+```yaml
+  translation:
+    group_name: "{{ 'raw' if node.name == 'raw_payments' else group_from_fqn(node.fqn) }}"
+```
+
+**Code sau (`dbt_ingest/defs.yaml`):**
+```yaml
+  translation:
+    group_name: "{{ 'raw/seeds' if node.name == 'raw_payments' else group_from_fqn(node.fqn) }}"
+```
+
+**Code trước (`assets.py`):**
+```python
+@dg.asset(key="raw_customers", compute_kind="python", group_name="raw", code_version="v1")
+...
+@dg.asset(key="raw_orders", compute_kind="python", group_name="raw", code_version="v1")
+```
+
+**Code sau (`assets.py`):**
+```python
+@dg.asset(key="raw_customers", compute_kind="python", group_name="raw/python", code_version="v1")
+...
+@dg.asset(key="raw_orders", compute_kind="python", group_name="raw/python", code_version="v1")
+```
+
+---
+
 ## Tổng kết kiến trúc sau khi fix
 
-- `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Oracle schema `vpbcustom` bằng bind params + `executemany`.
+- `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Oracle schema `vpbcustom` bằng bind params + `executemany`, trả về `MaterializeResult` với `data_version` hash theo nội dung data và `code_version` cố định để tránh báo "Unsynced" giả.
 - `dbt/models/sources.yml`: khai báo source `raw` (schema `vpbcustom`) với `meta.dagster.asset_key` khớp key của 2 Python asset trên, để Dagster nối đúng dependency giữa dbt model và asset Python.
 - `dbt/models/staging/stg_customers.sql`, `stg_orders.sql`: dùng `{{ source('raw', ...) }}` để đọc từ bảng do Python asset insert, thay vì seed/ref cũ.
 - `dbt/seeds/raw_customers.csv`, `raw_orders.csv`: không còn dùng (đã đổi tên thành `*_bk.csv`), vì Python asset đã thay thế vai trò ingest raw data.
+- `src/dagster_dbt_demo/defs/dbt_ingest/defs.yaml`: thêm điều kiện đặc biệt trong Jinja template của `translation.group_name` để seed `raw_payments` thuộc subgroup `raw/seeds`, fallback `group_from_fqn(node.fqn)` cho các node khác — không cần đổi `template_vars.py`.
+- `src/dagster_dbt_demo/defs/assets.py`: asset Python `raw_customers`, `raw_orders` thuộc subgroup `raw/python`.
+- `dbt/seeds/schema.yml`: khai báo `meta.dagster.group_name: raw` cho seed `raw_payments` — giữ lại cho rõ ý định, nhưng không có hiệu lực thực tế vì bị `translation.group_name` ở `defs.yaml` override (xem mục 7).

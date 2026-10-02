@@ -1,25 +1,25 @@
 import os
-
-import psycopg2
+import oracledb
 from dotenv import load_dotenv
 
 load_dotenv()
-
 
 class ConnectionFailedError(Exception):
     """Raised when the database host cannot be reached."""
 
 
-def get_connection() -> "psycopg2.extensions.connection":
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = int(os.environ.get("POSTGRES_PORT", "5432"))
+def get_connection() -> oracledb.Connection:
     try:
-        return psycopg2.connect(
-            host=host,
-            port=port,
-            user=os.environ.get("POSTGRES_USER", "dbt"),
-            password=os.environ.get("POSTGRES_PASSWORD", "dbt"),
-            dbname=os.environ.get("POSTGRES_DB", "jaffle_shop"),
+        return oracledb.connect(
+            user=os.environ["ORACLE_USER"],
+            password=os.environ["ORACLE_PASSWORD"],
+            dsn=os.environ["ORACLE_DNS"],
         )
-    except psycopg2.OperationalError as exc:
-        raise ConnectionFailedError(f"Cannot reach Postgres at '{host}:{port}'") from exc
+    except oracledb.Error:
+        raise
+    except OSError as exc:
+        # DNS failures and refused sockets can surface as bare OSError
+        # (e.g. socket.gaierror) rather than an oracledb.Error.
+        raise ConnectionFailedError(
+            f"Cannot reach Oracle at '{os.environ['DSN']}' "
+        ) from exc

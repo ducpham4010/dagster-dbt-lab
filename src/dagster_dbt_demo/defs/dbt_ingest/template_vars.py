@@ -21,3 +21,10 @@ def group_from_fqn() -> Callable[[Sequence[str]], str | None]:
         return None
 
     return _get_group
+
+@dg.template_var
+def daily_partitions_def() -> dg.DailyPartitionsDefinition:
+    return dg.DailyPartitionsDefinition(
+        start_date="2026-09-01",
+        timezone="Asia/Ho_Chi_Minh",
+    )
