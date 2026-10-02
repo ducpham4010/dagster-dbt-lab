@@ -24,3 +24,14 @@ models:
       materialized: table
       staging:
         materialized: view
+
+seeds:
+  jaffle_shop:
+    # raw_customers / raw_orders are ingested by Dagster Python assets into raw.*;
+    # keep these seeds disabled to avoid duplicate asset keys.
+    raw_customers:
+      +enabled: false
+    raw_orders:
+      +enabled: false
+    raw_payments:
+      +schema: raw
