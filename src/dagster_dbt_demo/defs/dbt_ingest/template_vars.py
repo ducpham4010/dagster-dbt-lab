@@ -27,4 +27,10 @@ def daily_partitions_def() -> dg.DailyPartitionsDefinition:
     return dg.DailyPartitionsDefinition(
         start_date="2026-09-01",
         timezone="Asia/Ho_Chi_Minh",
+        # Mặc định (end_offset=0) chỉ có partition của những ngày đã kết thúc: lúc 0h/1h ngày T,
+        # partition mới nhất là T-1. Bật end_offset=1 để partition của ngày đang diễn ra tồn tại ngay
+        # từ 00:00 -> chạy được partition T (start_date=T, end_date=T+1). Muốn schedule chạy partition T
+        # thì đặt thêm partition_offset_days: 0 trong defs/schedules/defs.yaml. Lưu ý: lúc đó ngày T mới có vài giờ
+        # dữ liệu, và partition hôm nay luôn hiện "missing" trên UI. Áp dụng cho toàn bộ asset dbt.
+        # end_offset=1,
     )

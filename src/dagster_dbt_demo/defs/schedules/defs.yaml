@@ -1,0 +1,22 @@
+type: dagster_dbt_demo.components.CronSchedulesComponent
+
+# Thêm/sửa lịch chạy ở đây, không cần sửa code.
+# Mỗi phần tử sinh ra job `<name>_job` + schedule `<name>_schedule` (ý nghĩa từng field xem
+# src/dagster_dbt_demo/components/cron_schedules_component.py).
+attributes:
+  schedules:
+    # Toàn bộ pipeline lúc 00:00 giờ VN mỗi ngày, chạy partition của ngày hôm trước (T-1):
+    # tick 00:00 ngày 2026-10-05 chạy partition 2026-10-04.
+    - name: daily_pipeline
+      cron: "0 0 * * *"
+      selection: "*"
+      partition_offset_days: 1
+      # timezone: Asia/Ho_Chi_Minh   # mặc định
+      # running: true                # mặc định: lịch tự bật
+
+    # Ví dụ: nạp lại 2 bảng raw mỗi 6 tiếng. Các asset này không chia partition -> partition_offset_days: null.
+    # - name: raw_refresh
+    #   cron: "0 */6 * * *"
+    #   selection: 'group:"raw/python"'
+    #   partition_offset_days: null
+    #   running: false
