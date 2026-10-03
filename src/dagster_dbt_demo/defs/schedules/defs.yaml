@@ -2,17 +2,32 @@ type: dagster_dbt_demo.components.CronSchedulesComponent
 
 # Thêm/sửa lịch chạy ở đây, không cần sửa code.
 # Mỗi phần tử sinh ra job `<name>_job` + schedule `<name>_schedule` (ý nghĩa từng field xem
-# src/dagster_dbt_demo/components/cron_schedules_component.py).
+# src/dagster_dbt_demo/components/cron_schedules_component.py, hướng dẫn: docs/scheduler_guide.md).
 attributes:
   schedules:
-    # Toàn bộ pipeline lúc 00:00 giờ VN mỗi ngày, chạy partition của ngày hôm trước (T-1):
-    # tick 00:00 ngày 2026-10-05 chạy partition 2026-10-04.
-    - name: daily_pipeline
-      cron: "0 0 * * *"
-      selection: "*"
+    # Mỗi model analystic một giờ riêng. Mỗi lịch tự chạy đủ từ raw -> staging -> model, nên không phụ thuộc
+    # lịch khác đã chạy hay chưa. Không đặt 2 lịch cùng giờ: cả hai cùng nạp lại raw_orders/raw_payments.
+
+    # customers lúc 01:00 giờ VN, partition T-1. Gồm raw + staging phía trước và customers_export phía sau.
+    - name: customers_daily
+      cron: "0 1 * * *"
+      selection: "+key:customers+"
       partition_offset_days: 1
-      # timezone: Asia/Ho_Chi_Minh   # mặc định
-      # running: true                # mặc định: lịch tự bật
+
+    # orders lúc 02:00 giờ VN, partition T-1. Gồm raw_orders, raw_payments, stg_orders, stg_payments.
+    - name: orders_daily
+      cron: "0 2 * * *"
+      selection: "+key:orders+"
+      partition_offset_days: 1
+
+    # (Đang tắt, đã thay bằng 2 lịch ở trên) Toàn bộ pipeline lúc 00:00 giờ VN, partition T-1.
+    # Bật lại thì nên tắt 2 lịch trên, không thì customers/orders bị chạy 2 lần mỗi ngày.
+    # - name: daily_pipeline
+    #   cron: "0 0 * * *"
+    #   selection: "*"
+    #   partition_offset_days: 1
+    #   # timezone: Asia/Ho_Chi_Minh   # mặc định
+    #   # running: true                # mặc định: lịch tự bật
 
     # Ví dụ: nạp lại 2 bảng raw mỗi 6 tiếng. Các asset này không chia partition -> partition_offset_days: null.
     # - name: raw_refresh

@@ -4,8 +4,9 @@
 # Hướng dẫn chi tiết cả 2 cách: docs/scheduler_guide.md
 #
 # Muốn chuyển sang đặt lịch bằng code:
-#   1. Comment phần tử `daily_pipeline` trong defs/schedules/defs.yaml
-#      (không thì lỗi trùng tên: "Duplicate definition found for daily_pipeline_schedule").
+#   1. Comment các lịch đang bật trong defs/schedules/defs.yaml (customers_daily, orders_daily): code mẫu
+#      dưới đây chạy toàn bộ pipeline, để song song thì customers/orders bị chạy 2 lần. Nếu bật lại
+#      `daily_pipeline` trong YAML thì sẽ lỗi trùng tên "Duplicate definition found for daily_pipeline_schedule".
 #   2. Bỏ comment khối "Dùng chung" + MỘT trong hai cách A hoặc B bên dưới
 #      (bỏ cả hai thì có 2 lịch cùng chạy 1 job). Bôi đen khối rồi Cmd+/ để bỏ comment.
 # =================================================================================================

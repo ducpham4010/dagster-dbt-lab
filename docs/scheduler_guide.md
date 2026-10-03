@@ -7,15 +7,22 @@ Project có 2 cách đặt lịch cho pipeline:
 | **1. Khai báo bằng YAML** | `src/dagster_dbt_demo/defs/schedules/defs.yaml` | **Đang dùng** |
 | **2. Viết bằng code Python** (2 biến thể A/B) | `src/dagster_dbt_demo/defs/schedules_code.py` | Đang tắt (toàn bộ là comment) |
 
-> Với cùng một job, **chỉ bật một cách**. Bật cả hai sẽ lỗi `Duplicate definition found for daily_pipeline_schedule`, hoặc nếu đặt tên khác nhau thì job bị chạy 2 lần.
+> Với cùng một nhóm asset, **chỉ đặt lịch ở một nơi**. Trùng tên sẽ lỗi `Duplicate definition found for ..._schedule`; khác tên thì asset bị chạy 2 lần.
 
-Lịch hiện tại: **00:00 giờ Việt Nam mỗi ngày**, chạy toàn bộ pipeline (raw Python asset → dbt seed/staging/analystic → `customers_export`) cho **partition của ngày hôm trước**.
+Lịch hiện tại: **mỗi model analystic một giờ riêng**, đều chạy cho **partition của ngày hôm trước** (giờ Việt Nam):
+
+| Schedule | Cron | Chạy các asset |
+|---|---|---|
+| `customers_daily_schedule` | `0 1 * * *` (01:00) | raw + staging cần cho `customers`, `customers`, `customers_export` |
+| `orders_daily_schedule` | `0 2 * * *` (02:00) | `raw_orders`, `raw_payments`, `stg_orders`, `stg_payments`, `orders` |
+
+Lịch cũ `daily_pipeline` (toàn bộ pipeline lúc 00:00) đang để dạng comment trong YAML. Chi tiết ở [mục 2](#mỗi-model-analystic-một-giờ-riêng-đang-dùng).
 
 ---
 
 ## 1. Khái niệm cần nắm
 
-- **Job**: tập asset được chạy cùng nhau (ở đây `daily_pipeline_job` = toàn bộ asset).
+- **Job**: tập asset được chạy cùng nhau (vd `orders_daily_job` = `orders` và các asset phía trước nó).
 - **Schedule**: lịch cron, mỗi lần tới giờ (một **tick**) thì gửi yêu cầu chạy job.
 - **Partition**: các asset dbt được chia partition **theo ngày**, timezone `Asia/Ho_Chi_Minh`, bắt đầu từ `2026-09-01`. Cấu hình ở `src/dagster_dbt_demo/defs/dbt_ingest/template_vars.py`. Mỗi run chạy cho đúng 1 partition (1 ngày).
 
@@ -51,13 +58,18 @@ type: dagster_dbt_demo.components.CronSchedulesComponent
 
 attributes:
   schedules:
-    - name: daily_pipeline
-      cron: "0 0 * * *"
-      selection: "*"
+    - name: customers_daily
+      cron: "0 1 * * *"
+      selection: "+key:customers+"
+      partition_offset_days: 1
+
+    - name: orders_daily
+      cron: "0 2 * * *"
+      selection: "+key:orders+"
       partition_offset_days: 1
 ```
 
-Mỗi phần tử trong `schedules` sinh ra **1 job `<name>_job` + 1 schedule `<name>_schedule`**. Ví dụ trên tạo ra `daily_pipeline_job` và `daily_pipeline_schedule`.
+Mỗi phần tử trong `schedules` sinh ra **1 job `<name>_job` + 1 schedule `<name>_schedule`**. Ví dụ trên tạo ra `customers_daily_job` / `customers_daily_schedule` và `orders_daily_job` / `orders_daily_schedule`.
 
 ### Các field
 
@@ -86,6 +98,21 @@ Kết quả dưới đây là danh sách asset thực tế của project này.
 | `"kind:dbt"` | toàn bộ asset dbt (không gồm Python asset và export) |
 | `"group:staging or group:analystic"` | staging + analystic |
 | `"kind:dbt and not group:staging"` | `customers`, `orders`, `raw_payments` |
+| `"+key:customers+"` | `customers` + toàn bộ asset phía trước + phía sau (`customers_export`) |
+| `"+key:orders+"` | `orders` + `raw_orders`, `raw_payments`, `stg_orders`, `stg_payments` (`orders` không có asset phía sau) |
+
+### Mỗi model analystic một giờ riêng (đang dùng)
+
+Mỗi model là một phần tử riêng, có `cron` riêng. `selection` dạng `+key:<model>+` để **mỗi lịch tự chạy đủ** những gì model đó cần: raw → staging → model → asset phía sau. Hai lịch không phụ thuộc nhau, nên lịch này lỗi hay trễ thì lịch kia vẫn đọc dữ liệu mới.
+
+Đổi giờ thì chỉ sửa `cron`. Thêm model analystic mới thì thêm một phần tử y hệt, đổi `name`, `cron`, `selection`.
+
+Lưu ý:
+- **Không đặt 2 lịch cùng giờ.** Cả hai cùng nạp lại `raw_orders`, `raw_payments` (truncate rồi insert). Chạy cùng lúc thì một run có thể đọc đúng lúc run kia vừa truncate. Mỗi lần chạy mất khoảng 10–20 giây, nên đặt cách nhau vài phút là đủ.
+- Raw và staging bị chạy lại ở mỗi lịch. Với dữ liệu nhỏ như hiện tại thì không đáng kể.
+- Đã chạy thử: job `customers` chỉ build `stg_*` + `customers`; job `orders` chỉ build `stg_orders`, `stg_payments` + `orders`. Mỗi bảng mang `business_date` của partition run tương ứng.
+
+**Cách khác: tách tầng.** Một lịch nạp raw + staging (`"+group:staging"`) lúc 00:00, rồi mỗi model chỉ chạy chính nó (`"key:customers+"` lúc 01:00, `"key:orders"` lúc 02:00). Cách này không chạy lặp raw/staging, nhưng phụ thuộc thời gian: nếu lịch 00:00 lỗi hoặc chạy quá 1 tiếng, model vẫn chạy trên dữ liệu cũ mà vẫn gắn `business_date` mới.
 
 ### Thêm một lịch mới
 
@@ -123,7 +150,7 @@ File `src/dagster_dbt_demo/defs/schedules_code.py` chứa sẵn code của cả 
 
 ### Bật cách này
 
-1. Trong `defs/schedules/defs.yaml`, comment phần tử `daily_pipeline`, hoặc đổi `schedules:` thành `schedules: []`.
+1. Trong `defs/schedules/defs.yaml`, comment các lịch đang bật (`customers_daily`, `orders_daily`), hoặc đổi `schedules:` thành `schedules: []`. Code mẫu chạy toàn bộ pipeline, nên để lịch YAML bật song song thì `customers`/`orders` sẽ bị chạy 2 lần.
 2. Trong `schedules_code.py`, bỏ comment khối **"Dùng chung"** và **chỉ một** trong hai khối **Cách A** hoặc **Cách B**. Bôi đen khối rồi bấm `Cmd+/`.
 3. Chạy kiểm tra ở [mục 5](#5-kiểm-tra-trước-khi-chạy-thật).
 
@@ -205,7 +232,25 @@ dg check defs                          # -> All definitions loaded successfully.
 dg list defs                           # xem bảng Schedules: tên + cron
 ```
 
-**Mô phỏng tick** để xem lịch sẽ chạy partition nào, mà không cần chờ tới giờ:
+**Chạy bộ test** (`tests/`, khoảng 3 giây). Các test này là phiên bản cố định của những lệnh kiểm tra nhanh bên dưới, đọc code test cũng là cách xem mẫu:
+
+```bash
+pytest                          # toàn bộ (61 test)
+pytest -m "not integration"     # bỏ test cần Doris
+pytest tests/test_schedules.py -v
+```
+
+| File | Kiểm tra gì | Cần Doris |
+|---|---|---|
+| `tests/test_schedules.py` | Lịch đang bật: tên, cron, timezone, tự bật; asset của từng job; tick chạy partition nào (kể cả qua tháng, giờ UTC); 3 giờ chạy tiếp theo | Không |
+| `tests/test_asset_selection.py` | Bảng cú pháp `selection` ở mục 2 chọn đúng asset. Thử selection mới: thêm 1 dòng vào bảng trong test | Không |
+| `tests/test_cron_schedules_component.py` | Component YAML trong sandbox với asset giả: mặc định, `partition_offset_days` 1/0/null, `end_offset`, `timezone`, `running`; lỗi cron sai, trùng tên, gõ sai tên field | Không |
+| `tests/test_schedules_code.py` | Code mẫu đang comment trong `schedules_code.py` (cách A, B) vẫn chạy được khi bỏ comment; cách B từ chối `cron_schedule` | Không |
+| `tests/test_doris_integration.py` | Dữ liệu thật trên Doris (chỉ đọc): đủ bảng/view, raw có dữ liệu, không sót `__dbt_tmp`, `customers` đủ cột, comment giữ dấu `'`, `business_date` hợp lệ. Không kết nối được thì tự skip | Có |
+
+Đổi lịch trong YAML (giờ, selection, thêm/bớt lịch) thì sửa các bảng `EXPECTED_*` đầu file `tests/test_schedules.py` cho khớp.
+
+**Mô phỏng tick** để xem lịch sẽ chạy partition nào, mà không cần chờ tới giờ (helper dùng lại được ở `tests/utils.py`):
 
 ```bash
 python - <<'EOF'
@@ -215,8 +260,8 @@ import dagster as dg
 from dagster_dbt_demo.definitions import defs
 
 d = defs()
-s = d.get_schedule_def("daily_pipeline_schedule")   # đổi tên nếu cần
-t = datetime(2026, 10, 5, 0, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+s = d.get_schedule_def("customers_daily_schedule")   # đổi tên nếu cần
+t = datetime(2026, 10, 5, 1, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
 with dg.build_schedule_context(scheduled_execution_time=t, repository_def=d.get_repository_def()) as ctx:
     print([r.partition_key for r in s.evaluate_tick(ctx).run_requests])   # ['2026-10-04']
 EOF
@@ -226,7 +271,8 @@ EOF
 
 ```bash
 # DORIS_OUTPUT để file export không ghi đè export/customers.csv
-DORIS_OUTPUT=/tmp/customers_test.csv dg launch --job daily_pipeline_job --partition 2026-10-03
+DORIS_OUTPUT=/tmp/customers_test.csv dg launch --job customers_daily_job --partition 2026-10-03
+dg launch --job orders_daily_job --partition 2026-10-03
 ```
 
 ---
@@ -241,7 +287,8 @@ DORIS_OUTPUT=/tmp/customers_test.csv dg launch --job daily_pipeline_job --partit
   - Hoặc chạy lần lượt từng ngày:
     ```bash
     for d in 2026-10-01 2026-10-02 2026-10-03; do
-      dg launch --job daily_pipeline_job --partition "$d"
+      dg launch --job customers_daily_job --partition "$d"
+      dg launch --job orders_daily_job --partition "$d"
     done
     ```
 - Partition trước `2026-09-01` (ngày bắt đầu trong `template_vars.py`) không tồn tại, nên không chạy được.
