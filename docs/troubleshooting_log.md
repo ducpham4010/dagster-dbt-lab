@@ -1,4 +1,4 @@
-# Troubleshooting Log — dagster-dbt (Oracle)
+# Troubleshooting Log — dagster-dbt (Oracle → Apache Doris)
 
 Ghi lại các lỗi gặp phải trong quá trình chạy `dg dev` và cách đã fix, theo thứ tự thời gian.
 
@@ -595,15 +595,155 @@ Lưu ý: chừng nào project còn nằm trong `~/Desktop`, iCloud có thể off
 
 ---
 
+## 16. Bổ sung: chuyển engine dbt từ Oracle sang Apache Doris (nhánh `doris`)
+
+**Bối cảnh:**
+Nhánh `doris` tách từ `oracle`. dbt đọc source `raw.raw_customers`/`raw.raw_orders` do Python asset ghi vào, nên đổi engine dbt thì Python asset và script export cũng phải chuyển sang Doris (cùng một database), nếu không lineage `raw_* → stg_*` sẽ trỏ sang bảng không tồn tại.
+
+Server lab: Doris 4.1.3 (1 FE + **1 BE**) tại `192.168.102.4:19030` (MySQL protocol), database `superapp_semantic`, user `root`, không password. Database này còn chứa bảng khác (`customer_360`, `rt_*`, ...), không trùng tên với bảng jaffle_shop.
+
+**Cách làm:**
+- `pyproject.toml`: bỏ `dbt-oracle`, thêm `dbt-doris>=1.0.0` (chạy được với `dbt-core 1.12.5`) và `mysql-connector-python` (driver Python asset dùng trực tiếp). Chạy `uv sync`.
+- `dbt/profiles.yml`: thay target `oracle` bằng `doris`, đọc từ biến môi trường `DORIS_*`. Doris không có tầng schema: **schema = database**, `database` phải bỏ trống hoặc trùng `schema`.
+- `dbt/models/sources.yml`: `schema: dev` → `schema: "{{ target.schema }}"` để source luôn nằm cùng database với target dbt (cũng là database mà Python asset ghi vào).
+- `dbt/dbt_project.yml`: Doris mặc định 3 replica/tablet, nên cluster chỉ có 1 BE sẽ lỗi khi `CREATE TABLE`. Set `+properties.replication_num` (mặc định `1`, đổi qua `DORIS_REPLICATION_NUM`) cho models và seeds. `dbt-doris` không nhận config `replication_num` ở cấp project (không có trong `DorisConfig`), phải đi qua `properties`.
+- `src/dagster_dbt_demo/defs/utils.py`: `get_connection()` dùng `mysql.connector` với `autocommit=True`. Nếu database chưa có (errno 1049) thì tự `CREATE DATABASE IF NOT EXISTS`. Lỗi không kết nối được (errno 2003/2005) được bọc thành `ConnectionFailedError`. Lưu ý: C-extension của mysql-connector trả về `DatabaseError` chứ không phải `InterfaceError` cho errno 2003, nên phải bắt theo errno.
+- `src/dagster_dbt_demo/defs/assets.py`: Doris có `CREATE TABLE IF NOT EXISTS`, nên bỏ khối PL/SQL bắt `ORA-00955` (mục 14). Bảng tạo dạng `UNIQUE KEY (id)` (tương đương primary key), `DISTRIBUTED BY HASH (id) BUCKETS 1`. Tên bảng viết thường vì Doris phân biệt hoa thường tên bảng (`lower_case_table_names=0`). Bind params đổi từ `:1` sang `%s`. `ORDER_DATE DATE` (Oracle, có giờ) đổi thành `order_date DATETIME`, bỏ `TO_DATE`.
+- `src/dagster_dbt_demo/defs/my_python_script/export_customers.py`: đọc `customers` từ Doris. Biến `ORACLE_TABLE`/`ORACLE_OUTPUT` đổi thành `DORIS_TABLE`/`DORIS_OUTPUT`.
+- `.env.example` (và `.env` local): biến `DORIS_HOST`, `DORIS_PORT`, `DORIS_USER`, `DORIS_PASSWORD`, `DORIS_SCHEMA`, `DORIS_REPLICATION_NUM`.
+
+**Code sau (`dbt/profiles.yml`):**
+```yaml
+jaffle_shop:
+  target: doris
+  outputs:
+    doris:
+      type: doris
+      host: "{{ env_var('DORIS_HOST', 'localhost') }}"
+      port: "{{ env_var('DORIS_PORT', '9030') | as_number }}"
+      username: "{{ env_var('DORIS_USER', 'root') }}"
+      password: "{{ env_var('DORIS_PASSWORD', '') }}"
+      schema: "{{ env_var('DORIS_SCHEMA', 'jaffle_shop') }}"
+      threads: 4
+```
+
+**Code sau (`dbt/dbt_project.yml`):**
+```yaml
+models:
+  jaffle_shop:
+      materialized: table
+      +properties:
+        replication_num: "{{ env_var('DORIS_REPLICATION_NUM', '1') }}"
+      staging:
+        materialized: view
+
+seeds:
+  jaffle_shop:
+    +properties:
+      replication_num: "{{ env_var('DORIS_REPLICATION_NUM', '1') }}"
+```
+
+**Code trước / sau (`src/dagster_dbt_demo/defs/assets.py`):**
+```python
+# Trước (Oracle)
+insert_statement = "INSERT INTO RAW_CUSTOMERS (ID, FIRST_NAME, LAST_NAME) VALUES (:1, :2, :3)"
+_create_table_if_not_exists(cursor, "CREATE TABLE RAW_CUSTOMERS (ID NUMBER PRIMARY KEY, ...)")  # PL/SQL bỏ qua ORA-00955
+
+# Sau (Doris)
+insert_statement = "INSERT INTO raw_customers (id, first_name, last_name) VALUES (%s, %s, %s)"
+_create_table_if_not_exists(
+    cursor,
+    "raw_customers",
+    "id INT NOT NULL, first_name VARCHAR(100), last_name VARCHAR(100)",
+    key="id",
+)  # -> CREATE TABLE IF NOT EXISTS ... UNIQUE KEY (id) DISTRIBUTED BY HASH (id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+```
+
+**Kiểm tra (đã verify end-to-end trên `192.168.102.4:19030/superapp_semantic`):**
+```bash
+source .venv/bin/activate          # dg cần `dbt` trong PATH
+export DAGSTER_HOME=~/.dagster_home
+rm -rf src/dagster_dbt_demo/defs/.local_defs_state
+dg check defs                       # All definitions loaded successfully.
+dg launch --assets 'group:"raw/python" or kind:"dbt"' --partition 2026-10-02
+# -> dbt: Done. PASS=26 ERROR=0, RUN_SUCCESS
+```
+Python asset tự đọc `.env` qua `load_dotenv()` trong `utils.py`, và dbt subprocess do Dagster gọi thừa hưởng các biến đó. Riêng khi chạy `dbt` tay trong `dbt/`, phải nạp env trước: `set -a; source ../.env; set +a`.
+
+---
+
+## 17. Bổ sung: escape dấu `'` trong `COMMENT` của bảng Doris (chủ động)
+
+**Vấn đề phòng ngừa:**
+`dbt-doris` 1.0.0 (macro `doris__table_comment`) chèn thẳng description của model vào `COMMENT '...'`, không escape. Description của `customers` có `customer's orders`, nên câu `CREATE TABLE` sẽ hỏng cú pháp ngay tại dấu `'`.
+
+**Cách fix:**
+Override macro trong project (macro của root project được ưu tiên hơn macro của adapter), escape `\` và `'`.
+
+**Code sau (`dbt/macros/doris_overrides.sql`):**
+```sql
+{% macro doris__table_comment() -%}
+  {% set description = model.get('description', "") %}
+  COMMENT '{{ description | replace("\\", "\\\\") | replace("'", "\\'") }}'
+{%- endmacro %}
+```
+Đã verify: `information_schema.tables.table_comment` của `customers` lưu đúng `... a customer's orders`.
+
+---
+
+## 18. `1105 (HY000): errCode = 2, detailMessage = Unknown column 'total_order_amount' in 'table list' in PROJECT clause` khi build `customers`
+
+**Nguyên nhân:**
+Khi model có khai báo `columns:` trong `schema.yml`, `dbt-doris` 1.0.0 (macro `doris__table_colume_type`) luôn bọc SQL thành `select <các cột trong schema.yml> from (<sql model>)`, kể cả khi **không** bật `contract.enforced`. dbt-core chỉ làm vậy khi có contract. Hệ quả:
+- `customers`: `schema.yml` mô tả cột `total_order_amount`, nhưng SQL thực sinh ra `customer_lifetime_value`, nên CTAS lỗi `Unknown column`.
+- `orders`: build "OK" nhưng **âm thầm mất cột `business_date`**, vì cột này không có trong `schema.yml`. `customers` cũng sẽ mất `customer_lifetime_value` và `business_date`.
+
+Trên Oracle không gặp, vì `dbt-oracle` không dùng danh sách cột trong `schema.yml` để tạo bảng.
+
+**Cách fix:**
+Override macro để chỉ project/cast theo danh sách cột khi contract được bật, giống dbt-core. Không sửa `schema.yml`: cột `total_order_amount` chỉ là tài liệu (lệch sẵn từ jaffle_shop gốc), không ảnh hưởng nữa.
+
+**Code trước (macro gốc của `dbt-doris`):**
+```sql
+{% macro doris__table_colume_type(sql) -%}
+    {% set cols = model.get('columns') %}
+    {% if cols %}
+        select {{get_table_columns_and_constraints()}} from (
+            {{sql}}
+        ) `_table_colume_type_name`
+    {% else %}
+        {{sql}}
+    {%- endif -%}
+{%- endmacro %}
+```
+
+**Code sau (`dbt/macros/doris_overrides.sql`):**
+```sql
+{% macro doris__table_colume_type(sql) -%}
+    {% if config.get('contract', {}).enforced %}
+        select {{ get_table_columns_and_constraints() }} from (
+            {{ sql }}
+        ) `_table_colume_type_name`
+    {% else %}
+        {{ sql }}
+    {%- endif -%}
+{%- endmacro %}
+```
+Kiểm tra: `dbt build` → `PASS=26 ERROR=0`. Bảng `customers` có đủ 8 cột (gồm `customer_lifetime_value`, `business_date`), `orders` có `business_date`. Chạy lại lần 2 (nhánh `ALTER TABLE ... REPLACE WITH TABLE` khi bảng đã tồn tại) cũng pass, không còn bảng `__dbt_tmp`.
+
+---
+
 ## Tổng kết kiến trúc sau khi fix
 
-- `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Oracle schema `vpbcustom` bằng bind params + `executemany`, trả về `MaterializeResult` với `data_version` hash theo nội dung data và `code_version` cố định để tránh báo "Unsynced" giả.
-- `dbt/models/sources.yml`: khai báo source `raw` (schema `vpbcustom`) với `meta.dagster.asset_key` khớp key của 2 Python asset trên, để Dagster nối đúng dependency giữa dbt model và asset Python.
+- `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Doris database `DORIS_SCHEMA` (lab: `superapp_semantic`) bằng bind params `%s` + `executemany`, trả về `MaterializeResult` với `data_version` hash theo nội dung data và `code_version` cố định để tránh báo "Unsynced" giả.
+- `dbt/models/sources.yml`: khai báo source `raw` (schema `{{ target.schema }}`, tức cùng database với target dbt, xem mục 16) với `meta.dagster.asset_key` khớp key của 2 Python asset trên, để Dagster nối đúng dependency giữa dbt model và asset Python.
 - `dbt/models/staging/stg_customers.sql`, `stg_orders.sql`: dùng `{{ source('raw', ...) }}` để đọc từ bảng do Python asset insert, thay vì seed/ref cũ.
 - `dbt/seeds/raw_customers.csv`, `raw_orders.csv`: không còn dùng (đã đổi tên thành `*_bk.csv`), vì Python asset đã thay thế vai trò ingest raw data.
 - `src/dagster_dbt_demo/defs/dbt_ingest/defs.yaml`: thêm điều kiện đặc biệt trong Jinja template của `translation.group_name` để seed `raw_payments` thuộc subgroup `raw/seeds`, fallback `group_from_fqn(node.fqn)` cho các node khác — không cần đổi `template_vars.py`.
 - `src/dagster_dbt_demo/defs/assets.py`: asset Python `raw_customers`, `raw_orders` thuộc subgroup `raw/python`.
 - `dbt/seeds/schema.yml`: khai báo `meta.dagster.group_name: raw` cho seed `raw_payments` — giữ lại cho rõ ý định, nhưng không có hiệu lực thực tế vì bị `translation.group_name` ở `defs.yaml` override (xem mục 7).
-- `src/dagster_dbt_demo/defs/assets.py`: asset `raw_customers`, `raw_orders` tự `CREATE TABLE` nếu chưa có (bỏ qua `ORA-00955`) trước khi truncate + insert (xem mục 14).
+- `src/dagster_dbt_demo/defs/assets.py`: asset `raw_customers`, `raw_orders` tự `CREATE TABLE IF NOT EXISTS` (Doris `UNIQUE KEY (id)`, `replication_num` theo `DORIS_REPLICATION_NUM`) trước khi truncate + insert (xem mục 14, 16).
 - `dbt/dbt_project.yml`: khai báo default cho `vars` (`start_date`, `end_date`, `partition_date`) để bước prepare `dbt compile` của Dagster chạy được không cần `--vars` (xem mục 13).
 - Môi trường: `DAGSTER_HOME=~/.dagster_home` (APFS, ngoài iCloud); `.venv` không nằm trong thư mục bị iCloud offload (xem mục 10–12).
+- Engine (nhánh `doris`, xem mục 16): dbt target `doris` (`dbt-doris` 1.0.0, MySQL protocol) đọc `DORIS_*` từ `.env`. Python asset (`utils.get_connection`, `mysql.connector`, autocommit) và `export_customers.py` dùng cùng database đó. `dbt_project.yml` set `+properties.replication_num` cho models/seeds.
+- `dbt/macros/doris_overrides.sql`: override 2 macro của `dbt-doris`: escape `COMMENT` (mục 17), và chỉ project theo cột trong `schema.yml` khi `contract.enforced` (mục 18).

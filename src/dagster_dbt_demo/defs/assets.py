@@ -20,23 +20,14 @@ def _data_version_for(rows: list[tuple]) -> dg.DataVersion:
     return dg.DataVersion(digest)
 
 
-def _create_table_if_not_exists(cursor, create_statement: str) -> None:
-    """Run CREATE TABLE, ignoring ORA-00955 (name is already used by an existing object).
-
-    Oracle 19c has no `CREATE TABLE IF NOT EXISTS` (only available from 23ai).
-    """
+def _create_table_if_not_exists(cursor, table: str, columns: str, key: str) -> None:
+    """Create a Doris UNIQUE KEY table (the equivalent of a primary key) if it is missing."""
+    replication_num = os.environ.get("DORIS_REPLICATION_NUM", "1")
     cursor.execute(
-        """
-        BEGIN
-            EXECUTE IMMEDIATE :ddl;
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """,
-        ddl=create_statement,
+        f"CREATE TABLE IF NOT EXISTS {table} ({columns}) "
+        f"UNIQUE KEY ({key}) "
+        f"DISTRIBUTED BY HASH ({key}) BUCKETS 1 "
+        f'PROPERTIES ("replication_num" = "{replication_num}")'
     )
 
 
@@ -44,7 +35,7 @@ def _create_table_if_not_exists(cursor, create_statement: str) -> None:
 def raw_customers(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Ingest raw customer data from an external source."""
     connection = get_connection()
-    insert_statement = "INSERT INTO RAW_CUSTOMERS (ID, FIRST_NAME, LAST_NAME) VALUES (:1, :2, :3)"
+    insert_statement = "INSERT INTO raw_customers (id, first_name, last_name) VALUES (%s, %s, %s)"
     rows = [
         (201, "ducph7", "P."),
         (202, "Shawn", "M."),
@@ -60,14 +51,13 @@ def raw_customers(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     cursor = connection.cursor()
     _create_table_if_not_exists(
         cursor,
-        "CREATE TABLE RAW_CUSTOMERS ("
-        "ID NUMBER PRIMARY KEY, "
-        "FIRST_NAME VARCHAR2(100), "
-        "LAST_NAME VARCHAR2(100))",
+        "raw_customers",
+        "id INT NOT NULL, first_name VARCHAR(100), last_name VARCHAR(100)",
+        key="id",
     )
-    cursor.execute("TRUNCATE TABLE RAW_CUSTOMERS")
+    cursor.execute("TRUNCATE TABLE raw_customers")
     cursor.executemany(insert_statement, rows)
-    connection.commit()
+    connection.close()
     return dg.MaterializeResult(
         data_version=_data_version_for(rows),
         metadata={"num_rows": len(rows)},
@@ -79,8 +69,7 @@ def raw_orders(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Ingest raw orders data from an external source."""
     connection = get_connection()
     insert_statement = (
-        "INSERT INTO RAW_ORDERS (ID, USER_ID, ORDER_DATE, STATUS) "
-        "VALUES (:1, :2, TO_DATE(:3, 'YYYY-MM-DD HH24:MI:SS'), :4)"
+        "INSERT INTO raw_orders (id, user_id, order_date, status) VALUES (%s, %s, %s, %s)"
     )
     rows = [
         (201, 201, "2018-01-01 00:00:00", "returned"),
@@ -97,15 +86,13 @@ def raw_orders(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     cursor = connection.cursor()
     _create_table_if_not_exists(
         cursor,
-        "CREATE TABLE RAW_ORDERS ("
-        "ID NUMBER PRIMARY KEY, "
-        "USER_ID NUMBER, "
-        "ORDER_DATE DATE, "
-        "STATUS VARCHAR2(50))",
+        "raw_orders",
+        "id INT NOT NULL, user_id INT, order_date DATETIME, status VARCHAR(50)",
+        key="id",
     )
-    cursor.execute("TRUNCATE TABLE RAW_ORDERS")
+    cursor.execute("TRUNCATE TABLE raw_orders")
     cursor.executemany(insert_statement, rows)
-    connection.commit()
+    connection.close()
     return dg.MaterializeResult(
         data_version=_data_version_for(rows),
         metadata={"num_rows": len(rows)},

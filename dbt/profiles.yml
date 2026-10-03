@@ -1,5 +1,5 @@
 jaffle_shop:
-  target: oracle
+  target: doris
   outputs:
     dev:
       type: duckdb
@@ -16,12 +16,13 @@ jaffle_shop:
       schema: analytics
       threads: 4
 
-    oracle:
-      type: oracle
-      user: "{{ env_var('ORACLE_USER') }}"
-      pass: "{{ env_var('ORACLE_PASSWORD') }}"
-      # Easy Connect string, same as the Python assets use: host:port/service_name
-      connection_string: "{{ env_var('ORACLE_DNS') }}"
-      schema: "{{ env_var('ORACLE_SCHEMA', env_var('ORACLE_USER')) }}"
-      database : DEV
+    doris:
+      type: doris
+      host: "{{ env_var('DORIS_HOST', 'localhost') }}"
+      # FE query port (MySQL protocol), not the 8030 HTTP port
+      port: "{{ env_var('DORIS_PORT', '9030') | as_number }}"
+      username: "{{ env_var('DORIS_USER', 'root') }}"
+      password: "{{ env_var('DORIS_PASSWORD', '') }}"
+      # Doris has no schema level: schema = database. `database` must be omitted or equal schema.
+      schema: "{{ env_var('DORIS_SCHEMA', 'jaffle_shop') }}"
       threads: 4

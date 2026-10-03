@@ -29,11 +29,16 @@ vars:
 models:
   jaffle_shop:
       materialized: table
+      # Doris defaults to 3 replicas -> CTAS fails on a single-BE lab cluster.
+      +properties:
+        replication_num: "{{ env_var('DORIS_REPLICATION_NUM', '1') }}"
       staging:
         materialized: view
 
 seeds:
   jaffle_shop:
+    +properties:
+      replication_num: "{{ env_var('DORIS_REPLICATION_NUM', '1') }}"
     raw_customers_bk:
       enabled: false
     raw_orders_bk:

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Export Oracle CUSTOMER to CSV.
+"""Export Doris `customers` (built by dbt) to CSV.
 
-Required environment variables: ORACLE_USER, ORACLE_PASSWORD, ORACLE_DNS.
-Optional: ORACLE_TABLE (default CUSTOMER), ORACLE_OUTPUT.
+Connection: DORIS_HOST, DORIS_PORT, DORIS_USER, DORIS_PASSWORD, DORIS_SCHEMA
+(same variables and defaults as the dbt `doris` target).
+Optional: DORIS_TABLE (default customers), DORIS_OUTPUT.
 Default output: <project_root>/export/customers.csv.
-Uses python-oracledb Thin mode. Run: python export_customer.py
+Uses mysql-connector-python (Doris FE speaks the MySQL protocol). Run: python export_customers.py
 """
 
 import csv
@@ -12,24 +13,14 @@ import os
 import re
 import tempfile
 from datetime import date, datetime
-from decimal import Decimal
 from pathlib import Path
 
-import oracledb
+import mysql.connector
 
 BATCH_SIZE = 10_000
 
 
-def number_as_decimal(cursor, metadata):
-    # Preserve Oracle NUMBER precision, including amounts and long identifiers.
-    if metadata.type_code == oracledb.DB_TYPE_NUMBER:
-        return cursor.var(Decimal, arraysize=cursor.arraysize)
-    return None
-
-
 def csv_value(value):
-    if isinstance(value, oracledb.LOB):
-        value = value.read()
     if value is None:
         return ""
     if isinstance(value, datetime):
@@ -42,34 +33,30 @@ def csv_value(value):
 
 
 def export_customer() -> tuple[Path, int]:
-    required = ("ORACLE_USER", "ORACLE_PASSWORD", "ORACLE_DNS")
-    missing = [name for name in required if not os.environ.get(name)]
-    if missing:
-        raise ValueError("Missing environment variables: " + ", ".join(missing))
-
-    table = os.environ.get("ORACLE_TABLE", "CUSTOMERS").strip()
-    # Supports standard, unquoted TABLE or SCHEMA.TABLE names.
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_$#]*(\.[A-Za-z][A-Za-z0-9_$#]*)?", table):
-        raise ValueError("ORACLE_TABLE must be TABLE or SCHEMA.TABLE.")
+    table = os.environ.get("DORIS_TABLE", "customers").strip()
+    # Supports unquoted TABLE or DATABASE.TABLE names (Doris table names are case-sensitive).
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)?", table):
+        raise ValueError("DORIS_TABLE must be TABLE or DATABASE.TABLE.")
 
     project_root = Path(__file__).parents[4]
     default_output = project_root / "export" / "customers.csv"
     output = Path(
-        os.environ.get("ORACLE_OUTPUT", str(default_output))
+        os.environ.get("DORIS_OUTPUT", str(default_output))
     ).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     row_count = 0
     temporary_path = None
 
     try:
-        with oracledb.connect(
-            user=os.environ["ORACLE_USER"],
-            password=os.environ["ORACLE_PASSWORD"],
-            dsn=os.environ["ORACLE_DNS"],
+        with mysql.connector.connect(
+            host=os.environ.get("DORIS_HOST", "localhost"),
+            port=int(os.environ.get("DORIS_PORT", "9030")),
+            user=os.environ.get("DORIS_USER", "root"),
+            password=os.environ.get("DORIS_PASSWORD", ""),
+            database=os.environ.get("DORIS_SCHEMA", "jaffle_shop"),
         ) as connection:
+            # Unbuffered cursor streams rows; DECIMAL columns come back as Decimal.
             with connection.cursor() as cursor:
-                cursor.arraysize = BATCH_SIZE
-                cursor.outputtypehandler = number_as_decimal
                 cursor.execute(f"SELECT * FROM {table}")
 
                 with tempfile.NamedTemporaryFile(
