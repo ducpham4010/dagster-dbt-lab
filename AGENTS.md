@@ -19,4 +19,5 @@ Whenever an error is fixed (or a proactive change is made to prevent one), appen
 
 - Project lives under `~/Desktop` (iCloud-synced): files can become `dataless` and hang reads. Keep `.venv` and `DAGSTER_HOME` outside iCloud (`DAGSTER_HOME=~/.dagster_home`). See log entries 10–12, 15. Check with `find . -path ./.venv.nosync -prune -o -flags +dataless -print`.
 - `dg` shells out to `dbt`: activate `.venv` first, or `dg check defs` fails with "The dbt executable 'dbt' does not exist".
+- Fresh clone: `dg check defs` / `pytest` fail with `DagsterDbtManifestNotFoundError: .../dbt/target/manifest.json does not exist` until dbt has produced a manifest. `my_python_script/defs.yaml` reads it via `asset_key_for_model`, and `dbt/target/` is gitignored. Run once: `cd dbt && set -a && source ../.env && set +a && dbt parse --profiles-dir .` (or start `dg dev`).
 - After changing the dbt project, clear Dagster's cached copy: `rm -rf src/dagster_dbt_demo/defs/.local_defs_state` (log entry 9).

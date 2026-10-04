@@ -733,6 +733,24 @@ Kiểm tra: `dbt build` → `PASS=26 ERROR=0`. Bảng `customers` có đủ 8 c�
 
 ---
 
+## 19. `DagsterDbtManifestNotFoundError: .../dbt/target/manifest.json does not exist` khi `dg check defs` / `pytest` trên clone mới
+
+**Nguyên nhân:**
+`src/dagster_dbt_demo/defs/my_python_script/defs.yaml` khai báo dependency bằng `{{ context.load_component('dbt_ingest').asset_key_for_model('customers') }}`. Hàm `asset_key_for_model` đọc `dbt/target/manifest.json` trong thư mục dbt gốc, **không** đọc bản cache ở `.local_defs_state`. `dbt/target/` bị gitignore nên clone mới (hoặc git worktree mới) chưa có file này → load definitions lỗi ở component `my_python_script`, dù `dbt_ingest` đã load xong.
+
+Thư mục làm việc cũ không gặp vì dbt đã từng chạy ở đó. Với `dg dev` có lẽ cũng không gặp, vì ở chế độ dev dagster-dbt chạy bước prepare (`dbt compile`) trong thư mục dbt gốc trước (suy ra từ code dagster-dbt, chưa kiểm chứng trên clone mới).
+
+Gặp khi đồng bộ code từ nhánh `doris` sang nhánh `oracle` trong một git worktree mới (2026-10-05). Lỗi có sẵn từ trước trên cả 3 nhánh, không do việc đồng bộ.
+
+**Cách fix:**
+Chạy `dbt parse` một lần (không cần kết nối database):
+```bash
+cd dbt && set -a && source ../.env && set +a && dbt parse --profiles-dir .
+```
+Đã ghi vào `AGENTS.md` (Known environment gotchas), docstring `tests/conftest.py` và mục 5 của `docs/scheduler_guide.md`. Chưa đổi code: có thể bỏ phụ thuộc manifest bằng cách khai báo dependency tĩnh (`deps: [customers]`), nhưng giữ cách `load_component(...)` theo tài liệu Dagster.
+
+---
+
 ## Tổng kết kiến trúc sau khi fix
 
 - `src/dagster_dbt_demo/defs/assets.py`: 2 Python asset `raw_customers`, `raw_orders` — truncate rồi insert data mẫu vào Doris database `DORIS_SCHEMA` (lab: `superapp_semantic`) bằng bind params `%s` + `executemany`, trả về `MaterializeResult` với `data_version` hash theo nội dung data và `code_version` cố định để tránh báo "Unsynced" giả.
@@ -748,5 +766,6 @@ Kiểm tra: `dbt build` → `PASS=26 ERROR=0`. Bảng `customers` có đủ 8 c�
 - Engine (nhánh `doris`, xem mục 16): dbt target `doris` (`dbt-doris` 1.0.0, MySQL protocol) đọc `DORIS_*` từ `.env`. Python asset (`utils.get_connection`, `mysql.connector`, autocommit) và `export_customers.py` dùng cùng database đó. `dbt_project.yml` set `+properties.replication_num` cho models/seeds.
 - `dbt/macros/doris_overrides.sql`: override 2 macro của `dbt-doris`: escape `COMMENT` (mục 17), và chỉ project theo cột trong `schema.yml` khi `contract.enforced` (mục 18).
 - Lịch chạy khai báo bằng YAML: `src/dagster_dbt_demo/defs/schedules/defs.yaml` dùng component tự viết `CronSchedulesComponent` (`src/dagster_dbt_demo/components/cron_schedules_component.py`). Mỗi phần tử (`name`, `cron`, `selection`, `partition_offset_days`, `timezone`, `running`) sinh job `<name>_job` + schedule `<name>_schedule`; partition key = ngày tick (theo `timezone`) trừ `partition_offset_days`. Hiện có `customers_daily` (`0 1 * * *`, `+key:customers+`) và `orders_daily` (`0 2 * * *`, `+key:orders+`), giờ `Asia/Ho_Chi_Minh`, partition T-1; lịch toàn bộ pipeline `daily_pipeline` (`0 0 * * *`) để dạng comment. Không dùng `build_schedule_from_partitioned_job` vì hàm này không nhận `cron_schedule` cho job partition theo thời gian. Lịch chỉ fire khi daemon chạy (`dg dev`). Cách đặt lịch bằng code (`@dg.schedule` / `build_schedule_from_partitioned_job`) giữ dạng comment ở `src/dagster_dbt_demo/defs/schedules_code.py`. Hướng dẫn cả 2 cách: `docs/scheduler_guide.md`.
-- `tests/` (pytest, cấu hình trong `pyproject.toml`): test lịch chạy, cú pháp selection, component YAML, code lịch mẫu đang comment (không cần Doris), và `test_doris_integration.py` kiểm tra dữ liệu thật trên Doris (marker `integration`, tự skip nếu không kết nối được). Chạy: `pytest` hoặc `pytest -m "not integration"`.
+- `tests/` (pytest, cấu hình trong `pyproject.toml`): test lịch chạy, cú pháp selection, component YAML, code lịch mẫu đang comment (không cần Doris), và `test_db_integration.py` kiểm tra dữ liệu thật trên Doris (marker `integration`, tự skip nếu không kết nối được). Chạy: `pytest` hoặc `pytest -m "not integration"`.
 - `src/dagster_dbt_demo/defs/dbt_ingest/defs.yaml` dùng component tự viết `DbtProjectWithVarsComponent` (`src/dagster_dbt_demo/components/dbt_project_with_vars_component.py`, kế thừa `DbtProjectComponent`): ngoài `cli_args`, gộp thêm vào `--vars` biến từ hàm Python `vars_fn` (`dbt_ingest/dbt_vars.py`) và từ tag `dbt/vars` của run (lịch khai báo bằng field `dbt_vars`). Thứ tự ghi đè: `cli_args` < `vars_fn` < tag. State dbt vẫn dùng key `DbtProjectComponent[...]` nên đổi `type` không cần xoá `.local_defs_state`. Hướng dẫn: `docs/dbt_vars_guide.md`.
+- Đồng bộ 3 nhánh `doris` / `oracle` / `postgres` (2026-10-05): file dùng chung (components, lịch, tests trừ `tests/test_db_integration.py`, docs trừ log này, models/seeds dbt, `dbt_ingest/defs.yaml` trừ 1 dòng ví dụ biến môi trường) giống hệt nhau giữa các nhánh. Chỉ khác ở lớp engine: `.env.example`, `pyproject.toml`/`uv.lock` (adapter + driver), `dbt/profiles.yml`, `dbt/dbt_project.yml`, `dbt/models/sources.yml`, `dbt/macros/` (Doris), `defs/utils.py`, `defs/assets.py`, `defs/my_python_script/export_customers.py`, `defs/dbt_ingest/dbt_vars.py` (tên bảng raw), nội dung `tests/test_db_integration.py`, dòng target trong `AGENTS.md`, vài dòng ví dụ trong docs, và log này. Kiểm tra: `git diff doris oracle --stat`.

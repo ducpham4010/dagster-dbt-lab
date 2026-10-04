@@ -229,6 +229,9 @@ cd ~/gitlab/dagster-dbt
 source .venv/bin/activate              # dg gọi dbt, phải có dbt trong PATH
 export DAGSTER_HOME=~/.dagster_home
 
+# Chỉ cần với clone mới: tạo dbt/target/manifest.json (my_python_script/defs.yaml đọc file này)
+(cd dbt && set -a && source ../.env && set +a && dbt parse --profiles-dir .)
+
 dg check defs                          # -> All definitions loaded successfully.
 dg list defs                           # xem bảng Schedules: tên + cron
 ```
