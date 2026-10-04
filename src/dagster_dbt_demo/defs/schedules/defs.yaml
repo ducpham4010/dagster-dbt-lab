@@ -13,6 +13,9 @@ attributes:
       cron: "0 1 * * *"
       selection: "+key:customers+"
       partition_offset_days: 1
+      # Mục 3 (docs/dbt_vars_guide.md): biến dbt riêng cho lịch này, ví dụ, model chưa dùng.
+      dbt_vars:
+        lookback_days: 7
 
     # orders lúc 02:00 giờ VN, partition T-1. Gồm raw_orders, raw_payments, stg_orders, stg_payments.
     - name: orders_daily

@@ -82,6 +82,7 @@ Mỗi phần tử trong `schedules` sinh ra **1 job `<name>_job` + 1 schedule `<
 | `timezone` | | `Asia/Ho_Chi_Minh` | Timezone của cron và của việc tính ngày. Nên trùng timezone của partition. |
 | `running` | | `true` | `true` = lịch tự bật khi load; `false` = để tắt, bật tay trên UI. |
 | `description` | | | Mô tả hiện trên UI. |
+| `dbt_vars` | | | Biến dbt riêng cho lịch này, vd `{lookback_days: 7}`. Gắn vào run qua tag `dbt/vars`, ghi đè biến cùng tên. Xem mục 3 trong `docs/dbt_vars_guide.md`. |
 
 ### Cú pháp `selection` hay dùng
 
@@ -235,7 +236,7 @@ dg list defs                           # xem bảng Schedules: tên + cron
 **Chạy bộ test** (`tests/`, khoảng 3 giây). Các test này là phiên bản cố định của những lệnh kiểm tra nhanh bên dưới, đọc code test cũng là cách xem mẫu:
 
 ```bash
-pytest                          # toàn bộ (61 test)
+pytest                          # toàn bộ
 pytest -m "not integration"     # bỏ test cần Doris
 pytest tests/test_schedules.py -v
 ```
@@ -246,6 +247,7 @@ pytest tests/test_schedules.py -v
 | `tests/test_asset_selection.py` | Bảng cú pháp `selection` ở mục 2 chọn đúng asset. Thử selection mới: thêm 1 dòng vào bảng trong test | Không |
 | `tests/test_cron_schedules_component.py` | Component YAML trong sandbox với asset giả: mặc định, `partition_offset_days` 1/0/null, `end_offset`, `timezone`, `running`; lỗi cron sai, trùng tên, gõ sai tên field | Không |
 | `tests/test_schedules_code.py` | Code mẫu đang comment trong `schedules_code.py` (cách A, B) vẫn chạy được khi bỏ comment; cách B từ chối `cron_schedule` | Không |
+| `tests/test_dbt_vars.py` | Truyền biến xuống dbt (`docs/dbt_vars_guide.md`): gộp `--vars`, tag `dbt/vars`, `compute_dbt_vars`, thứ tự ghi đè | Không |
 | `tests/test_doris_integration.py` | Dữ liệu thật trên Doris (chỉ đọc): đủ bảng/view, raw có dữ liệu, không sót `__dbt_tmp`, `customers` đủ cột, comment giữ dấu `'`, `business_date` hợp lệ. Không kết nối được thì tự skip | Có |
 
 Đổi lịch trong YAML (giờ, selection, thêm/bớt lịch) thì sửa các bảng `EXPECTED_*` đầu file `tests/test_schedules.py` cho khớp.

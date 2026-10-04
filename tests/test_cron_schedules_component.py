@@ -6,6 +6,7 @@ giả lập tick. Không cần dbt, không cần Doris.
 Chạy: pytest tests/test_cron_schedules_component.py -v
 """
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -14,7 +15,7 @@ import pytest
 from dagster.components.testing import create_defs_folder_sandbox
 
 from dagster_dbt_demo.components import CronSchedulesComponent
-from tests.utils import error_chain_text, job_asset_names, tick_partition_keys, vn_time
+from tests.utils import error_chain_text, job_asset_names, tick_partition_keys, tick_requests, vn_time
 
 # Partition giống project: theo ngày, giờ VN. Bản có end_offset=1 thì partition hôm nay tồn tại luôn.
 DAILY = dg.DailyPartitionsDefinition(start_date="2026-09-01", timezone="Asia/Ho_Chi_Minh")
@@ -119,6 +120,25 @@ def test_running_false_creates_stopped_schedule():
     with load_schedules([{"name": "a", "cron": "0 1 * * *", "running": False}]) as defs:
         assert defs.resolve_schedule_def("a_schedule").default_status == dg.DefaultScheduleStatus.STOPPED
 
+
+
+def test_dbt_vars_become_run_tag():
+    """dbt_vars của lịch -> tag `dbt/vars` (JSON) trên run, kể cả lịch không partition."""
+    with load_schedules([
+        {"name": "a", "cron": "0 1 * * *", "dbt_vars": {"lookback_days": 7, "region": "north"}},
+        {"name": "b", "cron": "0 */6 * * *", "selection": "key:plain_asset", "partition_offset_days": None,
+         "dbt_vars": {"full_refresh": True}},
+    ]) as defs:
+        [a] = tick_requests(defs, "a_schedule", vn_time(2026, 10, 5, 1, 0))
+        assert json.loads(a.tags["dbt/vars"]) == {"lookback_days": 7, "region": "north"}
+        [b] = tick_requests(defs, "b_schedule", vn_time(2026, 10, 5, 6, 0))
+        assert json.loads(b.tags["dbt/vars"]) == {"full_refresh": True}
+
+
+def test_no_dbt_vars_no_tag():
+    with load_schedules([{"name": "a", "cron": "0 1 * * *"}]) as defs:
+        [request] = tick_requests(defs, "a_schedule", vn_time(2026, 10, 5, 1, 0))
+        assert "dbt/vars" not in request.tags
 
 def test_invalid_cron_fails():
     with pytest.raises(Exception) as excinfo:

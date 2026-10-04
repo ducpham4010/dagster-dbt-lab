@@ -6,10 +6,12 @@ Bỏ qua file: pytest -m "not integration"
 """
 
 import os
+from datetime import date
 
 import mysql.connector
 import pytest
 
+from dagster_dbt_demo.defs.dbt_ingest import dbt_vars
 from dagster_dbt_demo.defs.utils import ConnectionFailedError, get_connection
 
 pytestmark = pytest.mark.integration
@@ -134,3 +136,11 @@ def test_business_date_is_single_valid_date(cursor, table):
     dates = [r[0] for r in query(cursor, f"select distinct business_date from {table}")]
     assert len(dates) == 1
     assert len(dates[0]) == 10 and dates[0][4] == "-" and dates[0][7] == "-"
+
+
+def test_raw_max_order_date_reads_doris(cursor):
+    """Biến raw_max_order_date (mục 4, dbt_ingest/dbt_vars.py) đọc được từ Doris và là ngày ISO.
+    Nhận fixture `cursor` để tự skip khi không kết nối được Doris."""
+    value = dbt_vars.raw_max_order_date()
+    expected = query(cursor, "select max(order_date) from raw_orders")[0][0].date()
+    assert date.fromisoformat(value) == expected

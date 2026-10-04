@@ -1,8 +1,12 @@
+import json
 from collections.abc import Sequence
 from datetime import timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import dagster as dg
+
+from .dbt_project_with_vars_component import DBT_VARS_TAG
 
 
 class CronSchedule(dg.Model, dg.Resolvable):
@@ -23,6 +27,9 @@ class CronSchedule(dg.Model, dg.Resolvable):
     # true = lịch tự bật khi load; false = để tắt, bật tay trên UI.
     running: bool = True
     description: str | None = None
+    # Biến dbt riêng cho lịch này, vd {lookback_days: 7}. Gắn vào run qua tag `dbt/vars`, ghi đè biến cùng tên
+    # trong dbt_ingest/defs.yaml. Xem mục 3 trong docs/dbt_vars_guide.md.
+    dbt_vars: dict[str, Any] | None = None
 
 
 class CronSchedulesComponent(dg.Component, dg.Model, dg.Resolvable):
@@ -57,11 +64,12 @@ def _build_schedule(spec: CronSchedule, job) -> dg.ScheduleDefinition:
         description=spec.description,
     )
     def _schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tags = {DBT_VARS_TAG: json.dumps(spec.dbt_vars)} if spec.dbt_vars else {}
         if spec.partition_offset_days is None:
-            return dg.RunRequest()
+            return dg.RunRequest(tags=tags)
         # Đổi về giờ `timezone` trước khi trừ ngày, tránh lệch 1 ngày nếu Dagster truyền giờ UTC.
         run_date = context.scheduled_execution_time.astimezone(ZoneInfo(spec.timezone))
         partition_key = (run_date - timedelta(days=spec.partition_offset_days)).strftime("%Y-%m-%d")
-        return dg.RunRequest(partition_key=partition_key)
+        return dg.RunRequest(partition_key=partition_key, tags=tags)
 
     return _schedule

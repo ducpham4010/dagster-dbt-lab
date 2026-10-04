@@ -1,1 +1,2 @@
 from .cron_schedules_component import CronSchedulesComponent as CronSchedulesComponent
+from .dbt_project_with_vars_component import DbtProjectWithVarsComponent as DbtProjectWithVarsComponent
