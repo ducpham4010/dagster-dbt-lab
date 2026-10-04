@@ -149,6 +149,8 @@ Những gì dùng được trong `context`:
 | `context.run.run_id` | id của run, vd để ghi audit |
 | `context.log.info(...)` | ghi log lên UI |
 
+Giải thích đầy đủ về `context`: `docs/asset_execution_context.md`.
+
 Lưu ý:
 - Hàm chạy **mỗi lần** step dbt chạy, bên trong run, sau khi các asset raw trong cùng run đã chạy xong. Vì vậy `raw_max_order_date` thấy dữ liệu vừa nạp.
 - Hàm lỗi (vd mất kết nối Doris) thì step dbt lỗi theo.
