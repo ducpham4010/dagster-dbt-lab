@@ -13,5 +13,6 @@ jaffle_shop:
       user: "{{ env_var('POSTGRES_USER', 'dbt') }}"
       password: "{{ env_var('POSTGRES_PASSWORD', 'dbt') }}"
       dbname: "{{ env_var('POSTGRES_DB', 'jaffle_shop') }}"
-      schema: analytics
+      # Schema dbt build model + seed vào. Bảng raw do Python asset ghi nằm ở schema `raw`.
+      schema: "{{ env_var('POSTGRES_SCHEMA', 'analytics') }}"
       threads: 4

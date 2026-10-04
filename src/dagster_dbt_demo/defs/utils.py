@@ -20,6 +20,8 @@ def get_connection() -> "psycopg2.extensions.connection":
             user=os.environ.get("POSTGRES_USER", "dbt"),
             password=os.environ.get("POSTGRES_PASSWORD", "dbt"),
             dbname=os.environ.get("POSTGRES_DB", "jaffle_shop"),
+            # Không đặt thì host không phản hồi sẽ treo rất lâu (vd test tích hợp khi không có Postgres).
+            connect_timeout=10,
         )
     except psycopg2.OperationalError as exc:
         raise ConnectionFailedError(f"Cannot reach Postgres at '{host}:{port}'") from exc

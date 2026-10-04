@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+dagster-home/
+.dg/
+
 # Distribution / packaging
 .Python
 build/

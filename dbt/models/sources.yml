@@ -2,6 +2,7 @@
 version: 2
 sources:
   - name: raw
+    # Schema `raw`: Python asset raw_customers/raw_orders ghi vào đây (xem defs/assets.py).
     schema: raw
     tables:
       - name: raw_customers

@@ -43,7 +43,8 @@ final as (
 
         {% endfor -%}
 
-        order_payments.total_amount as amount
+        order_payments.total_amount as amount,
+        '{{ var("start_date") }}' as business_date
 
     from orders
 
