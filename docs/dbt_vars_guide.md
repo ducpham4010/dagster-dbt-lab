@@ -134,7 +134,7 @@ def compute_dbt_vars(context: dg.AssetExecutionContext) -> dict[str, Any]:
         dbt_vars["prev_business_date"] = previous_business_day(day).isoformat()  # bỏ thứ 7, CN
         dbt_vars["is_month_end"] = (day + timedelta(days=1)).day == 1
         dbt_vars["quarter"] = f"{day.year}-Q{(day.month - 1) // 3 + 1}"
-    # Đọc Doris: ngày đặt hàng mới nhất trong bảng raw (vd làm watermark cho model incremental).
+    # Đọc database: ngày đặt hàng mới nhất trong bảng raw (vd làm watermark cho model incremental).
     dbt_vars["raw_max_order_date"] = raw_max_order_date()
     return dbt_vars
 ```
@@ -153,7 +153,7 @@ Giải thích đầy đủ về `context`: `docs/asset_execution_context.md`.
 
 Lưu ý:
 - Hàm chạy **mỗi lần** step dbt chạy, bên trong run, sau khi các asset raw trong cùng run đã chạy xong. Vì vậy `raw_max_order_date` thấy dữ liệu vừa nạp.
-- Hàm lỗi (vd mất kết nối Doris) thì step dbt lỗi theo.
+- Hàm lỗi (vd mất kết nối database) thì step dbt lỗi theo.
 - `vars_fn` chỉ được import lúc run chạy. Gõ sai đường dẫn thì `dg check defs` vẫn qua, đến lúc chạy mới lỗi. Test `tests/test_dbt_vars.py::test_defs_yaml_vars_fn_is_importable` bắt lỗi này sớm.
 - Log của step dbt có dòng `Biến dbt bổ sung: {...}` liệt kê các biến từ mục 3 và 4.
 
@@ -201,11 +201,11 @@ Thiếu mặc định thì lỗi `Required var 'quarter' not found in config` (x
 ## Kiểm tra
 
 - **Xem dbt nhận biến gì:** trên UI mở run → log của step `jaffle_shop`, tìm dòng `dbt build --vars {...}` và `Biến dbt bổ sung: {...}`.
-- **Chạy test** (không cần Doris):
+- **Chạy test** (không cần database):
   ```bash
   pytest tests/test_dbt_vars.py -v
   ```
-  Bộ test kiểm tra việc gộp `--vars`, tag `dbt/vars`, `compute_dbt_vars` (ngày làm việc trước, cuối tháng, quý), thứ tự ghi đè, `vars_fn` import được, lịch `customers_daily` có tag còn `orders_daily` thì không. `tests/test_doris_integration.py::test_raw_max_order_date_reads_doris` kiểm tra hàm đọc Doris.
+  Bộ test kiểm tra việc gộp `--vars`, tag `dbt/vars`, `compute_dbt_vars` (ngày làm việc trước, cuối tháng, quý), thứ tự ghi đè, `vars_fn` import được, lịch `customers_daily` có tag còn `orders_daily` thì không. `tests/test_db_integration.py::test_raw_max_order_date_reads_db` kiểm tra hàm đọc database.
 - **Chạy thử một partition:** `dg launch --job orders_daily_job --partition 2026-10-02`. Chạy theo cách này không có tag của lịch, nên `triggered_by = "manual"` và không có `lookback_days`. Lưu ý: partition của hôm nay chưa tồn tại (ngày chưa kết thúc), chạy sẽ báo `DagsterUnknownPartitionError`.
 
 ---

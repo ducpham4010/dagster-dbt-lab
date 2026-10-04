@@ -1,7 +1,7 @@
 """Test component CronSchedulesComponent (src/dagster_dbt_demo/components/cron_schedules_component.py).
 
 Khai báo lịch giống hệt trong defs.yaml (dạng dict), load qua sandbox của Dagster, ghép với vài asset giả rồi
-giả lập tick. Không cần dbt, không cần Doris.
+giả lập tick. Không cần dbt, không cần database.
 
 Chạy: pytest tests/test_cron_schedules_component.py -v
 """

@@ -1,7 +1,7 @@
 """Kiểm tra dữ liệu thật trên Doris sau khi pipeline đã chạy ít nhất 1 lần. CHỈ ĐỌC, không ghi gì.
 
 Kết nối theo biến DORIS_* trong .env (giống dbt và Python asset). Không kết nối được thì cả file tự skip.
-Chạy:        pytest tests/test_doris_integration.py -v
+Chạy:        pytest tests/test_db_integration.py -v
 Bỏ qua file: pytest -m "not integration"
 """
 
@@ -138,7 +138,7 @@ def test_business_date_is_single_valid_date(cursor, table):
     assert len(dates[0]) == 10 and dates[0][4] == "-" and dates[0][7] == "-"
 
 
-def test_raw_max_order_date_reads_doris(cursor):
+def test_raw_max_order_date_reads_db(cursor):
     """Biến raw_max_order_date (mục 4, dbt_ingest/dbt_vars.py) đọc được từ Doris và là ngày ISO.
     Nhận fixture `cursor` để tự skip khi không kết nối được Doris."""
     value = dbt_vars.raw_max_order_date()

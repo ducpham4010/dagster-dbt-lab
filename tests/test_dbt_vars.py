@@ -1,5 +1,5 @@
 """Test cách truyền biến xuống dbt (docs/dbt_vars_guide.md): gộp `--vars`, tag `dbt/vars` (mục 3),
-hàm Python compute_dbt_vars (mục 4) và thứ tự ghi đè giữa các nguồn. Không cần Doris.
+hàm Python compute_dbt_vars (mục 4) và thứ tự ghi đè giữa các nguồn. Không cần database.
 
 Chạy: pytest tests/test_dbt_vars.py -v
 """
@@ -101,7 +101,7 @@ def test_previous_business_day(day, expected):
 
 
 def test_compute_dbt_vars(monkeypatch):
-    # Không đọc Doris trong test này.
+    # Không đọc database trong test này.
     monkeypatch.setattr(dbt_vars, "raw_max_order_date", lambda: "2018-01-14")
     context = fake_context("2026-10-31", tags={"dagster/schedule_name": "customers_daily_schedule"})
     assert dbt_vars.compute_dbt_vars(context) == {

@@ -237,18 +237,18 @@ dg list defs                           # xem bảng Schedules: tên + cron
 
 ```bash
 pytest                          # toàn bộ
-pytest -m "not integration"     # bỏ test cần Doris
+pytest -m "not integration"     # bỏ test cần database
 pytest tests/test_schedules.py -v
 ```
 
-| File | Kiểm tra gì | Cần Doris |
+| File | Kiểm tra gì | Cần database |
 |---|---|---|
 | `tests/test_schedules.py` | Lịch đang bật: tên, cron, timezone, tự bật; asset của từng job; tick chạy partition nào (kể cả qua tháng, giờ UTC); 3 giờ chạy tiếp theo | Không |
 | `tests/test_asset_selection.py` | Bảng cú pháp `selection` ở mục 2 chọn đúng asset. Thử selection mới: thêm 1 dòng vào bảng trong test | Không |
 | `tests/test_cron_schedules_component.py` | Component YAML trong sandbox với asset giả: mặc định, `partition_offset_days` 1/0/null, `end_offset`, `timezone`, `running`; lỗi cron sai, trùng tên, gõ sai tên field | Không |
 | `tests/test_schedules_code.py` | Code mẫu đang comment trong `schedules_code.py` (cách A, B) vẫn chạy được khi bỏ comment; cách B từ chối `cron_schedule` | Không |
 | `tests/test_dbt_vars.py` | Truyền biến xuống dbt (`docs/dbt_vars_guide.md`): gộp `--vars`, tag `dbt/vars`, `compute_dbt_vars`, thứ tự ghi đè | Không |
-| `tests/test_doris_integration.py` | Dữ liệu thật trên Doris (chỉ đọc): đủ bảng/view, raw có dữ liệu, không sót `__dbt_tmp`, `customers` đủ cột, comment giữ dấu `'`, `business_date` hợp lệ. Không kết nối được thì tự skip | Có |
+| `tests/test_db_integration.py` | Dữ liệu thật trên database của nhánh (chỉ đọc): đủ bảng/view, raw có dữ liệu, `customers` đủ cột, `business_date` hợp lệ, cùng các kiểm tra riêng của engine (xem docstring file). Không kết nối được thì tự skip | Có |
 
 Đổi lịch trong YAML (giờ, selection, thêm/bớt lịch) thì sửa các bảng `EXPECTED_*` đầu file `tests/test_schedules.py` cho khớp.
 
@@ -269,7 +269,7 @@ with dg.build_schedule_context(scheduled_execution_time=t, repository_def=d.get_
 EOF
 ```
 
-**Chạy thử một partition** (chạy thật trên Doris):
+**Chạy thử một partition** (chạy thật trên database):
 
 ```bash
 # DORIS_OUTPUT để file export không ghi đè export/customers.csv
