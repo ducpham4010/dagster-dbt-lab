@@ -1,4 +1,6 @@
-type: dagster_dbt.DbtProjectComponent
+# DbtProjectComponent + gộp thêm biến dbt tính bằng Python (vars_fn) và biến riêng từng run (tag dbt/vars).
+# Cách truyền biến xuống dbt: docs/dbt_vars_guide.md
+type: dagster_dbt_demo.components.DbtProjectWithVarsComponent
 template_vars_module: .template_vars
 
 attributes:
@@ -21,6 +23,16 @@ attributes:
         start_date: "{{ partition_time_window.start.strftime('%Y-%m-%d') }}"
         end_date: "{{ partition_time_window.end.strftime('%Y-%m-%d') }}"
         partition_date: "{{ partition_key }}"
+        # ---- Ví dụ (model chưa dùng), xem docs/dbt_vars_guide.md ----
+        # Mục 1: suy ra từ partition. Lúc chạy chỉ có: partition_key, partition_time_window,
+        # partition_key_range, env, datetime (datetime.datetime, datetime.timedelta).
+        partition_month: "{{ partition_time_window.start.strftime('%Y-%m') }}"
+        prev_date: "{{ (partition_time_window.start - datetime.timedelta(days=1)).strftime('%Y-%m-%d') }}"
+        # Mục 2: hằng số và biến môi trường (.env).
+        source_system: superapp
+        target_schema: "{{ env('ORACLE_SCHEMA', 'DEV') }}"
+  # Mục 4: hàm Python tính thêm biến lúc chạy (ghi đè biến cùng tên ở trên).
+  vars_fn: dagster_dbt_demo.defs.dbt_ingest.dbt_vars.compute_dbt_vars
 
 post_processing:
   assets:

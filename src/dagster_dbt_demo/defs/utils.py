@@ -21,5 +21,5 @@ def get_connection() -> oracledb.Connection:
         # DNS failures and refused sockets can surface as bare OSError
         # (e.g. socket.gaierror) rather than an oracledb.Error.
         raise ConnectionFailedError(
-            f"Cannot reach Oracle at '{os.environ['DSN']}' "
+            f"Cannot reach Oracle at '{os.environ['ORACLE_DNS']}'"
         ) from exc
